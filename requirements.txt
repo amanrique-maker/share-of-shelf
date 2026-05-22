@@ -2,5 +2,5 @@ streamlit
 anthropic
 plotly
 pandas
-opencv-python
+opencv-python-headless
 pillow
