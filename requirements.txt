@@ -1,0 +1,6 @@
+streamlit
+anthropic
+plotly
+pandas
+opencv-python
+pillow
