@@ -29,10 +29,11 @@ def normalizar(texto: str) -> str:
 def es_nuestra(marca: str) -> bool:
     return normalizar(marca) in {normalizar(m) for m in NUESTRAS_MARCAS}
 
-# ── Prompt compartido ──────────────────────────────────────────────────────────
+# ── Prompt ─────────────────────────────────────────────────────────────────────
 PROMPT = """Analiza esta imagen de baldas de una tienda de alimentación para mascotas.
 
-Para cada grupo de productos visibles identifica:
+Para cada grupo de productos visibles identifica estos atributos:
+
 1. MARCA (ej: Advance, Purina, Royal Canin…). Si no se distingue → "Otros".
 2. PET: "Perro", "Gato" o "Otros".
 3. TECNOLOGÍA: "Dry" (pienso seco), "Wet" (comida húmeda), "Snacks" (premios/sticks).
@@ -40,14 +41,29 @@ Para cada grupo de productos visibles identifica:
    - Perro → "Maxi-Medium" o "Mini"
    - Gato  → "Esterilizado" o "No Esterilizado"
    - Snacks / Otros → "N/A"
-5. FACINGS: unidades visibles de frente (incluye parcialmente tapadas).
+5. FORMATO: peso o tamaño de la presentación (ej: "3 kg", "1.5 kg", "400 g", "85 g"). Si no se ve → null.
+6. FACINGS: número de unidades visibles de frente (incluye parcialmente tapadas).
+7. ANCHO_RELATIVO: proporción del espacio horizontal que ocupa este grupo en la balda, de 0 a 100.
+   El total de todos los grupos debe sumar exactamente 100.
+   Ejemplo: si hay 3 grupos que ocupan el mismo espacio → cada uno vale 33.3.
+8. PRECIO: precio por unidad que aparece en la etiqueta de la balda (número decimal, ej: 24.99). Si no se ve → null.
+9. PROMOCION: texto de la promoción si hay alguna (ej: "2x1", "2ª unidad 50%", "-20%"). Si no hay → null.
 
 Devuelve ÚNICAMENTE un JSON válido, sin texto adicional:
 {
   "productos": [
-    {"marca": "Advance", "pet": "Perro", "tecnologia": "Dry", "segmento": "Maxi-Medium", "facings": 8}
+    {
+      "marca": "Advance",
+      "pet": "Perro",
+      "tecnologia": "Dry",
+      "segmento": "Maxi-Medium",
+      "formato": "3 kg",
+      "facings": 8,
+      "ancho_relativo": 35.0,
+      "precio": 24.99,
+      "promocion": null
+    }
   ],
-  "total_facings": 8,
   "notas": ""
 }"""
 
@@ -59,7 +75,7 @@ def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
 
     msg = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=1500,
+        max_tokens=2000,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
             {"type": "text",  "text": PROMPT},
@@ -92,22 +108,69 @@ def extraer_frames(video_path: str, intervalo_s: int) -> list[bytes]:
     cap.release()
     return frames
 
-# ── Función mostrar resultados (reutilizable) ──────────────────────────────────
-def mostrar_resultados(df: pd.DataFrame, total: int, notas: str, origen: str = ""):
+# ── Helpers de gráficos ────────────────────────────────────────────────────────
+def bar_chart(x, y, colores, customdata, ylabel="Share (%)", hover_extra="", height=320):
+    fig = go.Figure(go.Bar(
+        x=x, y=y, marker_color=colores,
+        text=[f"{v:.1f}%" for v in y], textposition="outside",
+        hovertemplate=f"<b>%{{x}}</b><br>{hover_extra}Share: %{{y:.1f}}%<extra></extra>",
+        customdata=customdata,
+    ))
+    fig.update_layout(
+        plot_bgcolor="white", showlegend=False,
+        yaxis=dict(gridcolor="#f0f0f0", range=[0, max(y) * 1.25], title=ylabel),
+        margin=dict(t=10, b=10), height=height,
+    )
+    return fig
+
+def stacked_chart(pivot, colores_dict, ylabel="Facings", height=280):
+    fig = go.Figure()
+    for col in pivot.columns:
+        fig.add_trace(go.Bar(name=col, x=pivot.index, y=pivot[col],
+                             marker_color=colores_dict.get(col, "#BDBDBD")))
+    fig.update_layout(barmode="stack", plot_bgcolor="white",
+                      yaxis=dict(gridcolor="#f0f0f0", title=ylabel),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                      margin=dict(t=30, b=10), height=height)
+    return fig
+
+# ── Mostrar resultados ─────────────────────────────────────────────────────────
+def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
+
     df["es_nuestra"] = df["marca"].apply(es_nuestra)
-    df["share"]      = (df["facings"] / total * 100).round(1)
 
-    df_marca = df.groupby(["marca", "es_nuestra"], as_index=False)["facings"].sum()
-    df_marca["share"] = (df_marca["facings"] / total * 100).round(1)
-    df_marca = df_marca.sort_values("facings", ascending=False).reset_index(drop=True)
+    # ── SoS por facings
+    total_facings = df["facings"].sum()
+    df["sos_facings"] = (df["facings"] / total_facings * 100).round(1) if total_facings > 0 else 0
 
-    sos_nuestras = df_marca[df_marca["es_nuestra"]]["share"].sum()
-    n_marcas     = df_marca["marca"].nunique()
+    # ── SoS por ancho relativo
+    total_ancho = df["ancho_relativo"].sum()
+    df["sos_ancho"] = (df["ancho_relativo"] / total_ancho * 100).round(1) if total_ancho > 0 else 0
 
-    k1, k2, k3 = st.columns(3)
-    k1.markdown(f'<div class="metric-card"><div class="metric-value">{total}</div><div class="metric-label">Facings totales</div></div>', unsafe_allow_html=True)
-    k2.markdown(f'<div class="metric-card"><div class="metric-value">{sos_nuestras:.1f}%</div><div class="metric-label">Nuestro SoS</div></div>', unsafe_allow_html=True)
-    k3.markdown(f'<div class="metric-card"><div class="metric-value">{n_marcas}</div><div class="metric-label">Marcas detectadas</div></div>', unsafe_allow_html=True)
+    # Agrupado por marca para KPIs
+    df_marca = df.groupby(["marca", "es_nuestra"], as_index=False).agg(
+        facings=("facings", "sum"),
+        ancho=("ancho_relativo", "sum"),
+    )
+    df_marca["sos_facings"] = (df_marca["facings"] / total_facings * 100).round(1)
+    df_marca["sos_ancho"]   = (df_marca["ancho"]   / total_ancho   * 100).round(1)
+    df_marca = df_marca.sort_values("ancho", ascending=False).reset_index(drop=True)
+
+    sos_nuestras_ancho   = df_marca[df_marca["es_nuestra"]]["sos_ancho"].sum()
+    sos_nuestras_facings = df_marca[df_marca["es_nuestra"]]["sos_facings"].sum()
+    n_marcas  = df_marca["marca"].nunique()
+    n_promos  = df["promocion"].notna().sum()
+    precios_v = df["precio"].dropna()
+    precio_medio = precios_v.mean() if not precios_v.empty else None
+
+    # ── KPIs ──────────────────────────────────────────────────────
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.markdown(f'<div class="metric-card"><div class="metric-value">{sos_nuestras_ancho:.1f}%</div><div class="metric-label">SoS por ancho</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="metric-card"><div class="metric-value">{sos_nuestras_facings:.1f}%</div><div class="metric-label">SoS por facings</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="metric-card"><div class="metric-value">{n_marcas}</div><div class="metric-label">Marcas</div></div>', unsafe_allow_html=True)
+    k4.markdown(f'<div class="metric-card"><div class="metric-value">{n_promos}</div><div class="metric-label">En promoción</div></div>', unsafe_allow_html=True)
+    precio_str = f"{precio_medio:.2f}€" if precio_medio else "—"
+    k5.markdown(f'<div class="metric-card"><div class="metric-value">{precio_str}</div><div class="metric-label">Precio medio</div></div>', unsafe_allow_html=True)
 
     if notas:
         st.info(f"📝 {notas}")
@@ -116,81 +179,120 @@ def mostrar_resultados(df: pd.DataFrame, total: int, notas: str, origen: str = "
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Por marca", "Por tecnología", "Por pet", "Por segmento", "Detalle"])
+    # ── Tabs ──────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "Por marca", "Por tecnología", "Por pet", "Por segmento",
+        "Precios", "Promociones", "Detalle"
+    ])
 
-    def bar_chart(x, y, colores, customdata, height=320):
-        fig = go.Figure(go.Bar(
-            x=x, y=y, marker_color=colores,
-            text=[f"{v:.1f}%" for v in y], textposition="outside",
-            hovertemplate="<b>%{x}</b><br>Facings: %{customdata}<br>Share: %{y:.1f}%<extra></extra>",
-            customdata=customdata,
-        ))
-        fig.update_layout(
-            plot_bgcolor="white", showlegend=False,
-            yaxis=dict(gridcolor="#f0f0f0", range=[0, max(y) * 1.25], title="Share (%)"),
-            margin=dict(t=10, b=10), height=height,
-        )
-        return fig
-
-    def stacked_chart(pivot, colores_dict, height=280):
-        fig = go.Figure()
-        for col in pivot.columns:
-            fig.add_trace(go.Bar(name=col, x=pivot.index, y=pivot[col],
-                                 marker_color=colores_dict.get(col, "#BDBDBD")))
-        fig.update_layout(barmode="stack", plot_bgcolor="white",
-                          yaxis=dict(gridcolor="#f0f0f0", title="Facings"),
-                          legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                          margin=dict(t=30, b=10), height=height)
-        return fig
+    colores_marca = ["#E8472C" if v else "#BDBDBD" for v in df_marca["es_nuestra"]]
 
     with tab1:
+        modo_sos = st.radio("Calcular SoS por:", ["Ancho (recomendado)", "Facings"], horizontal=True, key="sos_modo")
+        col_sos = "sos_ancho" if "Ancho" in modo_sos else "sos_facings"
         st.plotly_chart(bar_chart(
-            df_marca["marca"], df_marca["share"],
-            ["#E8472C" if v else "#BDBDBD" for v in df_marca["es_nuestra"]],
+            df_marca["marca"], df_marca[col_sos], colores_marca,
             df_marca["facings"], height=340,
         ), use_container_width=True)
 
     with tab2:
-        df_tech = df.groupby("tecnologia", as_index=False)["facings"].sum()
-        df_tech["share"] = (df_tech["facings"] / total * 100).round(1)
-        df_tech = df_tech.sort_values("facings", ascending=False)
-        st.plotly_chart(bar_chart(df_tech["tecnologia"], df_tech["share"],
+        col_sos2 = col_sos  # sigue el mismo modo
+        df_tech = df.groupby("tecnologia", as_index=False).agg(facings=("facings","sum"), ancho=("ancho_relativo","sum"))
+        df_tech["sos"] = (df_tech["ancho"] / total_ancho * 100).round(1)
+        df_tech = df_tech.sort_values("ancho", ascending=False)
+        st.plotly_chart(bar_chart(df_tech["tecnologia"], df_tech["sos"],
                                   [COLORES_TECH.get(t, "#BDBDBD") for t in df_tech["tecnologia"]],
                                   df_tech["facings"]), use_container_width=True)
         st.markdown("**Desglose marca × tecnología**")
-        pivot = df.pivot_table(index="marca", columns="tecnologia", values="facings", aggfunc="sum", fill_value=0)
-        st.plotly_chart(stacked_chart(pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index], COLORES_TECH), use_container_width=True)
+        pivot = df.pivot_table(index="marca", columns="tecnologia", values="ancho_relativo", aggfunc="sum", fill_value=0)
+        st.plotly_chart(stacked_chart(pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index],
+                                      COLORES_TECH, ylabel="Ancho relativo"), use_container_width=True)
 
     with tab3:
-        df_pet = df.groupby("pet", as_index=False)["facings"].sum()
-        df_pet["share"] = (df_pet["facings"] / total * 100).round(1)
-        df_pet = df_pet.sort_values("facings", ascending=False)
-        st.plotly_chart(bar_chart(df_pet["pet"], df_pet["share"],
+        df_pet = df.groupby("pet", as_index=False).agg(facings=("facings","sum"), ancho=("ancho_relativo","sum"))
+        df_pet["sos"] = (df_pet["ancho"] / total_ancho * 100).round(1)
+        df_pet = df_pet.sort_values("ancho", ascending=False)
+        st.plotly_chart(bar_chart(df_pet["pet"], df_pet["sos"],
                                   [COLORES_PET.get(p, "#BDBDBD") for p in df_pet["pet"]],
                                   df_pet["facings"]), use_container_width=True)
         st.markdown("**Desglose marca × pet**")
-        pivot_pet = df.pivot_table(index="marca", columns="pet", values="facings", aggfunc="sum", fill_value=0)
-        st.plotly_chart(stacked_chart(pivot_pet.loc[pivot_pet.sum(axis=1).sort_values(ascending=False).index], COLORES_PET), use_container_width=True)
+        pivot_pet = df.pivot_table(index="marca", columns="pet", values="ancho_relativo", aggfunc="sum", fill_value=0)
+        st.plotly_chart(stacked_chart(pivot_pet.loc[pivot_pet.sum(axis=1).sort_values(ascending=False).index],
+                                      COLORES_PET, ylabel="Ancho relativo"), use_container_width=True)
 
     with tab4:
-        df_seg = df[df["segmento"] != "N/A"].groupby("segmento", as_index=False)["facings"].sum()
-        df_seg["share"] = (df_seg["facings"] / total * 100).round(1)
-        df_seg = df_seg.sort_values("facings", ascending=False)
+        df_seg = df[df["segmento"] != "N/A"].groupby("segmento", as_index=False).agg(
+            facings=("facings","sum"), ancho=("ancho_relativo","sum"))
+        df_seg["sos"] = (df_seg["ancho"] / total_ancho * 100).round(1)
+        df_seg = df_seg.sort_values("ancho", ascending=False)
         if not df_seg.empty:
-            st.plotly_chart(bar_chart(df_seg["segmento"], df_seg["share"],
+            st.plotly_chart(bar_chart(df_seg["segmento"], df_seg["sos"],
                                       [COLORES_SEG.get(s, "#BDBDBD") for s in df_seg["segmento"]],
                                       df_seg["facings"]), use_container_width=True)
             st.markdown("**Desglose marca × segmento**")
             df_nosna = df[df["segmento"] != "N/A"]
-            pivot_seg = df_nosna.pivot_table(index="marca", columns="segmento", values="facings", aggfunc="sum", fill_value=0)
-            st.plotly_chart(stacked_chart(pivot_seg.loc[pivot_seg.sum(axis=1).sort_values(ascending=False).index], COLORES_SEG), use_container_width=True)
+            pivot_seg = df_nosna.pivot_table(index="marca", columns="segmento", values="ancho_relativo", aggfunc="sum", fill_value=0)
+            st.plotly_chart(stacked_chart(pivot_seg.loc[pivot_seg.sum(axis=1).sort_values(ascending=False).index],
+                                          COLORES_SEG, ylabel="Ancho relativo"), use_container_width=True)
         else:
-            st.info("No se detectaron segmentos en esta imagen.")
+            st.info("No se detectaron segmentos.")
 
     with tab5:
-        df_show = df[["marca", "pet", "tecnologia", "segmento", "facings", "share"]].copy()
-        df_show.columns = ["Marca", "Pet", "Tecnología", "Segmento", "Facings", "Share (%)"]
-        st.dataframe(df_show.sort_values("Facings", ascending=False), hide_index=True, use_container_width=True)
+        df_precio = df[df["precio"].notna()].copy()
+        if df_precio.empty:
+            st.info("No se detectaron precios en esta imagen.")
+        else:
+            # Precio medio por marca
+            df_pm = df_precio.groupby(["marca","es_nuestra"], as_index=False)["precio"].mean().round(2)
+            df_pm = df_pm.sort_values("precio")
+            colores_pm = ["#E8472C" if v else "#BDBDBD" for v in df_pm["es_nuestra"]]
+            fig_p = go.Figure(go.Bar(
+                x=df_pm["marca"], y=df_pm["precio"],
+                marker_color=colores_pm,
+                text=[f"{v:.2f}€" for v in df_pm["precio"]],
+                textposition="outside",
+                hovertemplate="<b>%{x}</b><br>Precio medio: %{y:.2f}€<extra></extra>",
+            ))
+            fig_p.update_layout(
+                title="Precio medio por marca (€/unidad)",
+                plot_bgcolor="white", showlegend=False,
+                yaxis=dict(gridcolor="#f0f0f0", range=[0, df_pm["precio"].max() * 1.25], title="€"),
+                margin=dict(t=40, b=10), height=340,
+            )
+            st.plotly_chart(fig_p, use_container_width=True)
+
+            # Tabla precio por producto
+            st.markdown("**Precios por producto**")
+            df_ptab = df_precio[["marca","pet","tecnologia","formato","precio","promocion"]].copy()
+            df_ptab.columns = ["Marca","Pet","Tecnología","Formato","Precio (€)","Promoción"]
+            st.dataframe(df_ptab.sort_values("Precio (€)"), hide_index=True, use_container_width=True)
+
+    with tab6:
+        df_promo = df[df["promocion"].notna()].copy()
+        if df_promo.empty:
+            st.success("✅ No se detectaron productos en promoción.")
+        else:
+            st.warning(f"⚠️ {len(df_promo)} producto(s) en promoción detectados")
+            df_ptab = df_promo[["marca","pet","tecnologia","segmento","formato","precio","promocion"]].copy()
+            df_ptab.columns = ["Marca","Pet","Tecnología","Segmento","Formato","Precio (€)","Promoción"]
+            st.dataframe(df_ptab, hide_index=True, use_container_width=True)
+
+            # SoS de productos en promo vs no promo
+            ancho_promo    = df_promo["ancho_relativo"].sum()
+            ancho_no_promo = total_ancho - ancho_promo
+            fig_pie = go.Figure(go.Pie(
+                labels=["En promoción", "Sin promoción"],
+                values=[ancho_promo, ancho_no_promo],
+                marker_colors=["#FF9800", "#BDBDBD"],
+                hole=0.4,
+            ))
+            fig_pie.update_layout(title="SoS en promoción vs sin promoción", height=300, margin=dict(t=40,b=10))
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+    with tab7:
+        df_show = df[["marca","pet","tecnologia","segmento","formato","facings","sos_ancho","sos_facings","precio","promocion"]].copy()
+        df_show.columns = ["Marca","Pet","Tecnología","Segmento","Formato","Facings","SoS Ancho (%)","SoS Facings (%)","Precio (€)","Promoción"]
+        st.dataframe(df_show.sort_values("SoS Ancho (%)", ascending=False), hide_index=True, use_container_width=True)
         csv = df_show.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Descargar CSV", data=csv, file_name="share_of_shelf.csv",
                            mime="text/csv", use_container_width=True)
@@ -200,10 +302,10 @@ st.set_page_config(page_title="Share of Shelf Analyzer", page_icon="🛒", layou
 
 st.markdown("""
 <style>
-    .metric-card { background:#f8f9fa; border-radius:12px; padding:20px;
+    .metric-card { background:#f8f9fa; border-radius:12px; padding:16px;
                    text-align:center; border:1px solid #e9ecef; }
-    .metric-value { font-size:2.2rem; font-weight:700; color:#E8472C; }
-    .metric-label { font-size:0.9rem; color:#6c757d; margin-top:4px; }
+    .metric-value { font-size:1.8rem; font-weight:700; color:#E8472C; }
+    .metric-label { font-size:0.8rem; color:#6c757d; margin-top:4px; }
 </style>""", unsafe_allow_html=True)
 
 st.title("🛒 Share of Shelf Analyzer")
@@ -236,7 +338,13 @@ if modo == "📷 Foto":
                 try:
                     data = analizar_imagen(uploaded.getvalue(), uploaded.type)
                     df   = pd.DataFrame(data["productos"])
-                    mostrar_resultados(df, data["total_facings"], data.get("notas", ""))
+                    # Asegurar columnas opcionales
+                    for col in ["formato","precio","promocion","ancho_relativo"]:
+                        if col not in df.columns:
+                            df[col] = None
+                    df["ancho_relativo"] = pd.to_numeric(df["ancho_relativo"], errors="coerce").fillna(1)
+                    df["precio"]         = pd.to_numeric(df["precio"],         errors="coerce")
+                    mostrar_resultados(df, data.get("notas", ""))
                 except json.JSONDecodeError as e:
                     st.error("❌ Error al interpretar la respuesta de la IA.")
                     st.code(str(e))
@@ -259,7 +367,6 @@ else:
             st.video(video_file)
             intervalo = st.slider("Analizar un frame cada… (segundos)", 1, 10, 3)
 
-            # Guardar temporalmente para calcular duración
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
                 tmp.write(video_file.getvalue())
                 tmp_path = tmp.name
@@ -272,7 +379,6 @@ else:
 
             n_analizar = max(1, int(duracion_s / intervalo))
             st.info(f"⏱ Duración: **{duracion_s:.0f}s** · Se analizarán **{n_analizar} frames** · Tiempo estimado: ~{n_analizar * 8}s")
-
             analizar_video = st.button("🎬 Analizar vídeo", type="primary", use_container_width=True)
         else:
             st.info("👆 Sube un vídeo para comenzar")
@@ -288,33 +394,39 @@ else:
                 todos_productos = []
                 notas_todas     = []
 
-                progress = st.progress(0, text="Extrayendo y analizando frames…")
-
+                progress = st.progress(0, text="Analizando frames…")
                 for i, frame_bytes in enumerate(frames):
-                    progress.progress((i + 1) / len(frames),
-                                      text=f"Analizando frame {i+1} de {len(frames)}…")
+                    progress.progress((i + 1) / len(frames), text=f"Frame {i+1} de {len(frames)}…")
                     try:
                         data = analizar_imagen(frame_bytes, "image/jpeg")
                         todos_productos.extend(data["productos"])
                         if data.get("notas"):
                             notas_todas.append(data["notas"])
                     except Exception:
-                        pass  # Si un frame falla, continuamos
+                        pass
 
                 progress.empty()
                 os.unlink(tmp_path)
 
                 if not todos_productos:
-                    st.error("No se pudieron analizar los frames. Prueba con otro vídeo.")
+                    st.error("No se pudieron analizar los frames.")
                 else:
-                    # Agregar: suma de facings de todos los frames
                     df_total = pd.DataFrame(todos_productos)
-                    df_agg   = df_total.groupby(["marca","pet","tecnologia","segmento"], as_index=False)["facings"].sum()
-                    total    = int(df_agg["facings"].sum())
-                    notas    = " · ".join(set(notas_todas)) if notas_todas else ""
+                    for col in ["formato","precio","promocion","ancho_relativo"]:
+                        if col not in df_total.columns:
+                            df_total[col] = None
+                    df_total["ancho_relativo"] = pd.to_numeric(df_total["ancho_relativo"], errors="coerce").fillna(1)
+                    df_total["precio"]         = pd.to_numeric(df_total["precio"],         errors="coerce")
 
+                    df_agg = df_total.groupby(["marca","pet","tecnologia","segmento","formato"], as_index=False).agg(
+                        facings=("facings","sum"),
+                        ancho_relativo=("ancho_relativo","sum"),
+                        precio=("precio","mean"),
+                        promocion=("promocion","first"),
+                    )
+                    notas = " · ".join(set(notas_todas)) if notas_todas else ""
                     st.success(f"✅ {len(frames)} frames analizados")
-                    mostrar_resultados(df_agg, total, notas,
+                    mostrar_resultados(df_agg, notas,
                                        origen=f"Resultado acumulado de {len(frames)} frames (intervalo: {intervalo}s)")
 
             except Exception as e:
