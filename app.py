@@ -38,7 +38,10 @@ Para cada grupo de productos visibles identifica:
 
 1. MARCA (ej: Advance, Purina, Royal Canin…). Si no se distingue → "Otros".
 2. PET: "Perro", "Gato" o "Otros".
-3. TECNOLOGÍA: "Dry" (pienso seco), "Wet" (comida húmeda), "Snacks" (premios/sticks).
+3. TECNOLOGÍA — fíjate en el tipo de envase:
+   - "Dry"    → bolsas o sacos de pienso seco / croquetas
+   - "Wet"    → latas metálicas, tarrinas de plástico, sobres/pouches, brick/tetra pak, tarros de cristal (cualquier comida húmeda envasada)
+   - "Snacks" → premios, sticks, palitos, huesos masticables, golosinas para mascotas
 4. SEGMENTO:
    - Perro → "Maxi-Medium" o "Mini"
    - Gato  → "Esterilizado" o "No Esterilizado"
