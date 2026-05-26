@@ -38,10 +38,11 @@ Para cada grupo de productos visibles identifica:
 
 1. MARCA (ej: Advance, Purina, Royal Canin…). Si no se distingue → "Otros".
 2. PET: "Perro", "Gato" o "Otros".
-3. TECNOLOGÍA — fíjate en el tipo de envase:
-   - "Dry"    → bolsas o sacos de pienso seco / croquetas
-   - "Wet"    → latas metálicas, tarrinas de plástico, sobres/pouches, brick/tetra pak, tarros de cristal (cualquier comida húmeda envasada)
-   - "Snacks" → premios, sticks, palitos, huesos masticables, golosinas para mascotas
+3. TECNOLOGÍA — clasifica por el CONTENIDO, no por la forma del envase:
+   - "Dry"    → SOLO bolsas o sacos que contengan pienso seco / croquetas
+   - "Wet"    → cualquier envase con comida húmeda: latas metálicas, tarrinas, sobres/pouches, brick, tetra pak, cajas de cartón con comida húmeda, tarros de cristal
+   - "Snacks" → premios, sticks, palitos, huesos masticables, golosinas, helados para mascotas
+   ATENCIÓN: una caja de cartón NO es automáticamente Dry. Fíjate en las imágenes y texto del envase para determinar si es húmedo o snack.
 4. SEGMENTO:
    - Perro → "Maxi-Medium" o "Mini"
    - Gato  → "Esterilizado" o "No Esterilizado"
@@ -433,6 +434,8 @@ else:
                     st.success(f"✅ {len(frames)} frames analizados")
                     mostrar_resultados(df_agg, notas,
                                        origen=f"Resultado acumulado de {len(frames)} frames (intervalo: {intervalo}s)")
+                    with st.expander("🔍 Ver respuesta bruta del último frame (debug)"):
+                        st.code(st.session_state.get("debug_raw", ""), language="json")
 
             except Exception as e:
                 st.error(f"❌ Error inesperado: {e}")
