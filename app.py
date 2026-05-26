@@ -32,7 +32,9 @@ def es_nuestra(marca: str) -> bool:
 # ── Prompt ─────────────────────────────────────────────────────────────────────
 PROMPT = """Analiza esta imagen de baldas de una tienda de alimentación para mascotas.
 
-Para cada grupo de productos visibles identifica estos atributos:
+IMPORTANTE: Sé lo más granular posible. Cada fila representa una combinación única de Marca + Pet + Tecnología + Segmento + Formato. No agrupes productos distintos en una sola fila.
+
+Para cada grupo de productos visibles identifica:
 
 1. MARCA (ej: Advance, Purina, Royal Canin…). Si no se distingue → "Otros".
 2. PET: "Perro", "Gato" o "Otros".
@@ -41,28 +43,17 @@ Para cada grupo de productos visibles identifica estos atributos:
    - Perro → "Maxi-Medium" o "Mini"
    - Gato  → "Esterilizado" o "No Esterilizado"
    - Snacks / Otros → "N/A"
-5. FORMATO: peso o tamaño de la presentación (ej: "3 kg", "1.5 kg", "400 g", "85 g"). Si no se ve → null.
-6. FACINGS: número de unidades visibles de frente (incluye parcialmente tapadas).
-7. ANCHO_RELATIVO: proporción del espacio horizontal que ocupa este grupo en la balda, de 0 a 100.
-   El total de todos los grupos debe sumar exactamente 100.
-   Ejemplo: si hay 3 grupos que ocupan el mismo espacio → cada uno vale 33.3.
-8. PRECIO: precio por unidad que aparece en la etiqueta de la balda (número decimal, ej: 24.99). Si no se ve → null.
-9. PROMOCION: texto de la promoción si hay alguna (ej: "2x1", "2ª unidad 50%", "-20%"). Si no hay → null.
+5. FORMATO: peso o tamaño (ej: "3 kg", "1.5 kg", "400 g"). Si no se ve → null.
+6. FACINGS: unidades visibles de frente (incluye parcialmente tapadas).
+7. ANCHO_RELATIVO: anchura proporcional que ocupa este grupo respecto al total de la balda (número entre 0 y 100). Estima visualmente. El conjunto de todos los valores debe sumar aproximadamente 100.
+8. PRECIO: precio en la etiqueta de balda (decimal, ej: 24.99). Si no se ve → null.
+9. PROMOCION: texto promocional visible (ej: "2x1", "2ª unidad 50%", "-20%"). Si no hay → null.
 
 Devuelve ÚNICAMENTE un JSON válido, sin texto adicional:
 {
   "productos": [
-    {
-      "marca": "Advance",
-      "pet": "Perro",
-      "tecnologia": "Dry",
-      "segmento": "Maxi-Medium",
-      "formato": "3 kg",
-      "facings": 8,
-      "ancho_relativo": 35.0,
-      "precio": 24.99,
-      "promocion": null
-    }
+    {"marca": "Advance", "pet": "Perro", "tecnologia": "Dry", "segmento": "Maxi-Medium", "formato": "3 kg", "facings": 8, "ancho_relativo": 35.0, "precio": 24.99, "promocion": null},
+    {"marca": "Ultima",  "pet": "Gato",  "tecnologia": "Dry", "segmento": "Esterilizado", "formato": "1.5 kg", "facings": 4, "ancho_relativo": 20.0, "precio": 12.50, "promocion": "2x1"}
   ],
   "notas": ""
 }"""
@@ -75,7 +66,7 @@ def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
 
     msg = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=2000,
+        max_tokens=4000,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
             {"type": "text",  "text": PROMPT},
