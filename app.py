@@ -86,7 +86,12 @@ def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
     # Debug: guardar respuesta en session_state para inspección
     st.session_state["debug_raw"] = raw
 
-    return json.loads(raw)
+    result = json.loads(raw)
+    result["_usage"] = {
+        "input_tokens":  msg.usage.input_tokens,
+        "output_tokens": msg.usage.output_tokens,
+    }
+    return result
 
 # ── Función análisis vídeo ─────────────────────────────────────────────────────
 def extraer_frames(video_path: str, intervalo_s: int) -> list[bytes]:
@@ -106,6 +111,23 @@ def extraer_frames(video_path: str, intervalo_s: int) -> list[bytes]:
         idx += step
     cap.release()
     return frames
+
+# ── Coste tokens ──────────────────────────────────────────────────────────────
+PRECIO_INPUT  = 15.0 / 1_000_000   # $ por token input  (claude-opus-4-5)
+PRECIO_OUTPUT = 75.0 / 1_000_000   # $ por token output (claude-opus-4-5)
+
+def mostrar_tokens(input_tokens: int, output_tokens: int, n_frames: int = 1):
+    coste = input_tokens * PRECIO_INPUT + output_tokens * PRECIO_OUTPUT
+    coste_eur = coste * 0.92  # USD → EUR aprox.
+    label = f"{n_frames} frame{'s' if n_frames > 1 else ''}" if n_frames > 1 else "análisis"
+    st.markdown(f"""
+    <div style="background:#f0f7ff;border:1px solid #cce0ff;border-radius:10px;
+                padding:12px 18px;margin-top:12px;font-size:0.85rem;color:#444;">
+        🔢 <b>Tokens consumidos</b> ({label}) &nbsp;|&nbsp;
+        ⬆️ Input: <b>{input_tokens:,}</b> &nbsp;·&nbsp;
+        ⬇️ Output: <b>{output_tokens:,}</b> &nbsp;·&nbsp;
+        💶 Coste: <b>~{coste_eur:.3f} €</b>
+    </div>""", unsafe_allow_html=True)
 
 # ── Helpers de gráficos ────────────────────────────────────────────────────────
 def bar_chart(x, y, colores, customdata, ylabel="Share (%)", hover_extra="", height=320):
@@ -344,8 +366,9 @@ if modo == "📷 Foto":
                     df["ancho_relativo"] = pd.to_numeric(df["ancho_relativo"], errors="coerce").fillna(1)
                     df["precio"]         = pd.to_numeric(df["precio"],         errors="coerce")
                     mostrar_resultados(df, data.get("notas", ""))
+                    u = data.get("_usage", {})
+                    mostrar_tokens(u.get("input_tokens", 0), u.get("output_tokens", 0))
 
-                    # Panel debug
                     with st.expander("🔍 Ver respuesta bruta de Claude (debug)"):
                         st.code(st.session_state.get("debug_raw", ""), language="json")
 
@@ -401,6 +424,9 @@ else:
                 notas_todas     = []
 
                 progress = st.progress(0, text="Analizando frames…")
+                total_input_tokens  = 0
+                total_output_tokens = 0
+
                 for i, frame_bytes in enumerate(frames):
                     progress.progress((i + 1) / len(frames), text=f"Frame {i+1} de {len(frames)}…")
                     try:
@@ -408,6 +434,9 @@ else:
                         todos_productos.extend(data["productos"])
                         if data.get("notas"):
                             notas_todas.append(data["notas"])
+                        u = data.get("_usage", {})
+                        total_input_tokens  += u.get("input_tokens",  0)
+                        total_output_tokens += u.get("output_tokens", 0)
                     except Exception:
                         pass
 
@@ -434,6 +463,8 @@ else:
                     st.success(f"✅ {len(frames)} frames analizados")
                     mostrar_resultados(df_agg, notas,
                                        origen=f"Resultado acumulado de {len(frames)} frames (intervalo: {intervalo}s)")
+                    mostrar_tokens(total_input_tokens, total_output_tokens, n_frames=len(frames))
+
                     with st.expander("🔍 Ver respuesta bruta del último frame (debug)"):
                         st.code(st.session_state.get("debug_raw", ""), language="json")
 
