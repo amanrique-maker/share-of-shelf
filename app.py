@@ -81,6 +81,10 @@ def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
         m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
         if m:
             raw = m.group(1).strip()
+
+    # Debug: guardar respuesta en session_state para inspección
+    st.session_state["debug_raw"] = raw
+
     return json.loads(raw)
 
 # ── Función análisis vídeo ─────────────────────────────────────────────────────
@@ -339,9 +343,16 @@ if modo == "📷 Foto":
                     df["ancho_relativo"] = pd.to_numeric(df["ancho_relativo"], errors="coerce").fillna(1)
                     df["precio"]         = pd.to_numeric(df["precio"],         errors="coerce")
                     mostrar_resultados(df, data.get("notas", ""))
+
+                    # Panel debug
+                    with st.expander("🔍 Ver respuesta bruta de Claude (debug)"):
+                        st.code(st.session_state.get("debug_raw", ""), language="json")
+
                 except json.JSONDecodeError as e:
                     st.error("❌ Error al interpretar la respuesta de la IA.")
                     st.code(str(e))
+                    with st.expander("🔍 Respuesta bruta"):
+                        st.code(st.session_state.get("debug_raw", ""))
                 except Exception as e:
                     st.error(f"❌ Error inesperado: {e}")
         elif not uploaded:
