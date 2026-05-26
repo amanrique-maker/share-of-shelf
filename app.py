@@ -424,7 +424,7 @@ else:
                     df_total["ancho_relativo"] = pd.to_numeric(df_total["ancho_relativo"], errors="coerce").fillna(1)
                     df_total["precio"]         = pd.to_numeric(df_total["precio"],         errors="coerce")
 
-                    df_agg = df_total.groupby(["marca","pet","tecnologia","segmento","formato"], as_index=False).agg(
+                    df_agg = df_total.groupby(["marca","pet","tecnologia","segmento","formato"], as_index=False, dropna=False).agg(
                         facings=("facings","sum"),
                         ancho_relativo=("ancho_relativo","sum"),
                         precio=("precio","mean"),
