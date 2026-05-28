@@ -27,7 +27,19 @@ def normalizar(texto: str) -> str:
     return unicodedata.normalize("NFD", texto.lower()).encode("ascii", "ignore").decode("ascii")
 
 def es_nuestra(marca: str) -> bool:
-    return normalizar(marca) in {normalizar(m) for m in NUESTRAS_MARCAS}
+    """
+    Marca nuestra si el nombre normalizado coincide exactamente
+    o empieza por una de nuestras marcas seguida de espacio
+    (ej: 'Ultima PRO', 'Advance Sensitive', 'Nature's Variety Instinct').
+    """
+    m_norm = normalizar(marca)
+    return any(
+        m_norm == normalizar(n) or m_norm.startswith(normalizar(n) + " ")
+        for n in NUESTRAS_MARCAS
+    )
+
+def es_video(f) -> bool:
+    return f.type.startswith("video/") or f.name.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
 PROMPT = """Analiza esta imagen de baldas de una tienda de alimentación para mascotas.
@@ -64,7 +76,10 @@ Devuelve ÚNICAMENTE un JSON válido, sin texto adicional:
 
 # ── Función análisis imagen ────────────────────────────────────────────────────
 def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
-    api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or st.session_state.get("_api_key", "")
+    if not api_key:
+        st.error("❌ Introduce tu API Key de Anthropic en la barra lateral izquierda.")
+        st.stop()
     client  = anthropic.Anthropic(api_key=api_key)
     img_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
@@ -83,7 +98,6 @@ def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
         if m:
             raw = m.group(1).strip()
 
-    # Debug: guardar respuesta en session_state para inspección
     st.session_state["debug_raw"] = raw
 
     result = json.loads(raw)
@@ -113,12 +127,12 @@ def extraer_frames(video_path: str, intervalo_s: int) -> list[bytes]:
     return frames
 
 # ── Coste tokens ──────────────────────────────────────────────────────────────
-PRECIO_INPUT  = 15.0 / 1_000_000   # $ por token input  (claude-opus-4-5)
-PRECIO_OUTPUT = 75.0 / 1_000_000   # $ por token output (claude-opus-4-5)
+PRECIO_INPUT  = 15.0 / 1_000_000
+PRECIO_OUTPUT = 75.0 / 1_000_000
 
 def mostrar_tokens(input_tokens: int, output_tokens: int, n_frames: int = 1):
     coste = input_tokens * PRECIO_INPUT + output_tokens * PRECIO_OUTPUT
-    coste_eur = coste * 0.92  # USD → EUR aprox.
+    coste_eur = coste * 0.92
     label = f"{n_frames} frame{'s' if n_frames > 1 else ''}" if n_frames > 1 else "análisis"
     st.markdown(f"""
     <div style="background:#f0f7ff;border:1px solid #cce0ff;border-radius:10px;
@@ -160,15 +174,12 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
 
     df["es_nuestra"] = df["marca"].apply(es_nuestra)
 
-    # ── SoS por facings
     total_facings = df["facings"].sum()
     df["sos_facings"] = (df["facings"] / total_facings * 100).round(1) if total_facings > 0 else 0
 
-    # ── SoS por ancho relativo
     total_ancho = df["ancho_relativo"].sum()
     df["sos_ancho"] = (df["ancho_relativo"] / total_ancho * 100).round(1) if total_ancho > 0 else 0
 
-    # Agrupado por marca para KPIs
     df_marca = df.groupby(["marca", "es_nuestra"], as_index=False).agg(
         facings=("facings", "sum"),
         ancho=("ancho_relativo", "sum"),
@@ -182,7 +193,17 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
     n_marcas  = df_marca["marca"].nunique()
     n_promos  = df["promocion"].notna().sum()
     precios_v = df["precio"].dropna()
-    precio_medio = precios_v.mean() if not precios_v.empty else None
+
+    # Rango de precios en lugar de media
+    if precios_v.empty:
+        precio_str  = "—"
+        precio_label = "Precios"
+    elif len(precios_v) == 1:
+        precio_str  = f"{precios_v.iloc[0]:.2f}€"
+        precio_label = "Precio"
+    else:
+        precio_str  = f"{precios_v.min():.2f}–{precios_v.max():.2f}€"
+        precio_label = "Rango precios"
 
     # ── KPIs ──────────────────────────────────────────────────────
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -190,8 +211,7 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
     k2.markdown(f'<div class="metric-card"><div class="metric-value">{sos_nuestras_facings:.1f}%</div><div class="metric-label">SoS por facings</div></div>', unsafe_allow_html=True)
     k3.markdown(f'<div class="metric-card"><div class="metric-value">{n_marcas}</div><div class="metric-label">Marcas</div></div>', unsafe_allow_html=True)
     k4.markdown(f'<div class="metric-card"><div class="metric-value">{n_promos}</div><div class="metric-label">En promoción</div></div>', unsafe_allow_html=True)
-    precio_str = f"{precio_medio:.2f}€" if precio_medio else "—"
-    k5.markdown(f'<div class="metric-card"><div class="metric-value">{precio_str}</div><div class="metric-label">Precio medio</div></div>', unsafe_allow_html=True)
+    k5.markdown(f'<div class="metric-card"><div class="metric-value" style="font-size:1.3rem">{precio_str}</div><div class="metric-label">{precio_label}</div></div>', unsafe_allow_html=True)
 
     if notas:
         st.info(f"📝 {notas}")
@@ -217,7 +237,6 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
         ), use_container_width=True)
 
     with tab2:
-        col_sos2 = col_sos  # sigue el mismo modo
         df_tech = df.groupby("tecnologia", as_index=False).agg(facings=("facings","sum"), ancho=("ancho_relativo","sum"))
         df_tech["sos"] = (df_tech["ancho"] / total_ancho * 100).round(1)
         df_tech = df_tech.sort_values("ancho", ascending=False)
@@ -263,27 +282,31 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
         if df_precio.empty:
             st.info("No se detectaron precios en esta imagen.")
         else:
-            # Precio medio por marca
-            df_pm = df_precio.groupby(["marca","es_nuestra"], as_index=False)["precio"].mean().round(2)
-            df_pm = df_pm.sort_values("precio")
-            colores_pm = ["#E8472C" if v else "#BDBDBD" for v in df_pm["es_nuestra"]]
+            # Precio por producto individual — sin promediar
+            df_precio["producto_label"] = df_precio.apply(
+                lambda r: f"{r['marca']}" + (f" · {r['formato']}" if pd.notna(r.get("formato")) and r.get("formato") else ""),
+                axis=1,
+            )
+            df_ps = df_precio.sort_values("precio").reset_index(drop=True)
+            colores_p = ["#E8472C" if v else "#BDBDBD" for v in df_ps["es_nuestra"]]
             fig_p = go.Figure(go.Bar(
-                x=df_pm["marca"], y=df_pm["precio"],
-                marker_color=colores_pm,
-                text=[f"{v:.2f}€" for v in df_pm["precio"]],
+                x=df_ps["producto_label"],
+                y=df_ps["precio"],
+                marker_color=colores_p,
+                text=[f"{v:.2f}€" for v in df_ps["precio"]],
                 textposition="outside",
-                hovertemplate="<b>%{x}</b><br>Precio medio: %{y:.2f}€<extra></extra>",
+                hovertemplate="<b>%{x}</b><br>Precio: %{y:.2f}€<extra></extra>",
             ))
             fig_p.update_layout(
-                title="Precio medio por marca (€/unidad)",
+                title="Precio por producto (€/unidad)",
                 plot_bgcolor="white", showlegend=False,
-                yaxis=dict(gridcolor="#f0f0f0", range=[0, df_pm["precio"].max() * 1.25], title="€"),
-                margin=dict(t=40, b=10), height=340,
+                yaxis=dict(gridcolor="#f0f0f0", range=[0, df_ps["precio"].max() * 1.3], title="€"),
+                xaxis=dict(tickangle=-30),
+                margin=dict(t=40, b=80), height=380,
             )
             st.plotly_chart(fig_p, use_container_width=True)
 
-            # Tabla precio por producto
-            st.markdown("**Precios por producto**")
+            st.markdown("**Tabla de precios**")
             df_ptab = df_precio[["marca","pet","tecnologia","formato","precio","promocion"]].copy()
             df_ptab.columns = ["Marca","Pet","Tecnología","Formato","Precio (€)","Promoción"]
             st.dataframe(df_ptab.sort_values("Precio (€)"), hide_index=True, use_container_width=True)
@@ -298,7 +321,6 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
             df_ptab.columns = ["Marca","Pet","Tecnología","Segmento","Formato","Precio (€)","Promoción"]
             st.dataframe(df_ptab, hide_index=True, use_container_width=True)
 
-            # SoS de productos en promo vs no promo
             ancho_promo    = df_promo["ancho_relativo"].sum()
             ancho_no_promo = total_ancho - ancho_promo
             fig_pie = go.Figure(go.Pie(
@@ -329,147 +351,160 @@ st.markdown("""
     .metric-label { font-size:0.8rem; color:#6c757d; margin-top:4px; }
 </style>""", unsafe_allow_html=True)
 
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/3514/3514447.png", width=60)
+    st.title("Share of Shelf")
+    st.divider()
+
+    if not st.secrets.get("ANTHROPIC_API_KEY", ""):
+        st.markdown("### 🔑 API Key de Anthropic")
+        user_key = st.text_input(
+            "Pega tu API Key aquí",
+            type="password",
+            placeholder="sk-ant-api03-...",
+            help="Obtén tu key gratuita en console.anthropic.com",
+            label_visibility="collapsed",
+        )
+        if user_key:
+            st.session_state["_api_key"] = user_key
+            st.success("✅ Key guardada para esta sesión")
+        else:
+            st.warning("Introduce tu API Key para analizar imágenes")
+        st.markdown("[Obtener API Key →](https://console.anthropic.com)", unsafe_allow_html=False)
+        st.divider()
+
+    st.caption("Powered by Claude claude-opus-4-5 Vision · Affinity Petcare")
+
 st.title("🛒 Share of Shelf Analyzer")
 st.divider()
 
-modo = st.radio("Modo de análisis", ["📷 Foto", "🎬 Vídeo"], horizontal=True)
-st.divider()
+# ── Upload múltiple (fotos + vídeos combinados) ────────────────────────────────
+st.subheader("📁 Sube fotos y/o vídeos")
+st.caption("Puedes combinar varias fotos y vídeos de distintas baldas — se analizarán juntos.")
 
-# ════════════════════════════════════════════════════════════════
-# MODO FOTO
-# ════════════════════════════════════════════════════════════════
-if modo == "📷 Foto":
-    col_upload, col_results = st.columns([1, 1], gap="large")
+uploaded_files = st.file_uploader(
+    "Selecciona archivos",
+    type=["jpg", "jpeg", "png", "webp", "mp4", "mov", "avi", "mkv"],
+    accept_multiple_files=True,
+    label_visibility="collapsed",
+)
 
-    with col_upload:
-        st.subheader("📷 Imagen")
-        uploaded = st.file_uploader("Selecciona una foto", type=["jpg","jpeg","png","webp"],
-                                    label_visibility="collapsed")
-        if uploaded:
-            st.image(uploaded, use_container_width=True)
-            analizar = st.button("🔍 Analizar", type="primary", use_container_width=True)
-        else:
-            st.info("👆 Sube una foto para comenzar")
-            analizar = False
+if uploaded_files:
+    fotos  = [f for f in uploaded_files if not es_video(f)]
+    videos = [f for f in uploaded_files if es_video(f)]
 
-    with col_results:
-        st.subheader("📊 Resultados")
-        if uploaded and analizar:
-            with st.spinner("Analizando con IA…"):
-                try:
-                    data = analizar_imagen(uploaded.getvalue(), uploaded.type)
-                    df   = pd.DataFrame(data["productos"])
-                    # Asegurar columnas opcionales
-                    for col in ["formato","precio","promocion","ancho_relativo"]:
-                        if col not in df.columns:
-                            df[col] = None
-                    df["ancho_relativo"] = pd.to_numeric(df["ancho_relativo"], errors="coerce").fillna(1)
-                    df["precio"]         = pd.to_numeric(df["precio"],         errors="coerce")
-                    mostrar_resultados(df, data.get("notas", ""))
-                    u = data.get("_usage", {})
-                    mostrar_tokens(u.get("input_tokens", 0), u.get("output_tokens", 0))
+    if fotos:
+        st.markdown(f"**📷 {len(fotos)} foto(s)**")
+        cols = st.columns(min(len(fotos), 4))
+        for i, f in enumerate(fotos):
+            with cols[i % 4]:
+                st.image(f, use_container_width=True, caption=f.name)
 
-                    with st.expander("🔍 Ver respuesta bruta de Claude (debug)"):
-                        st.code(st.session_state.get("debug_raw", ""), language="json")
+    if videos:
+        st.markdown(f"**🎬 {len(videos)} vídeo(s)**")
+        for v in videos:
+            st.video(v)
+            st.caption(v.name)
+        intervalo = st.slider("Analizar un frame de vídeo cada… (segundos)", 1, 10, 3)
+    else:
+        intervalo = 3
 
-                except json.JSONDecodeError as e:
-                    st.error("❌ Error al interpretar la respuesta de la IA.")
-                    st.code(str(e))
-                    with st.expander("🔍 Respuesta bruta"):
-                        st.code(st.session_state.get("debug_raw", ""))
-                except Exception as e:
-                    st.error(f"❌ Error inesperado: {e}")
-        elif not uploaded:
-            st.markdown('<div style="text-align:center;padding:60px 20px;color:#adb5bd"><div style="font-size:3rem">📈</div><div>Los resultados aparecerán aquí</div></div>', unsafe_allow_html=True)
-
-# ════════════════════════════════════════════════════════════════
-# MODO VÍDEO
-# ════════════════════════════════════════════════════════════════
+    st.divider()
+    analizar = st.button("🔍 Analizar todo", type="primary", use_container_width=True)
 else:
-    col_upload, col_results = st.columns([1, 1], gap="large")
+    st.info("👆 Sube una o más fotos y/o vídeos para comenzar")
+    analizar  = False
+    intervalo = 3
 
-    with col_upload:
-        st.subheader("🎬 Vídeo")
-        video_file = st.file_uploader("Selecciona un vídeo", type=["mp4","mov","avi","mkv"],
-                                      label_visibility="collapsed")
-        if video_file:
-            st.video(video_file)
-            intervalo = st.slider("Analizar un frame cada… (segundos)", 1, 10, 3)
+# ── Análisis ───────────────────────────────────────────────────────────────────
+if uploaded_files and analizar:
+    todos_productos         = []
+    notas_todas             = []
+    total_input_tokens      = 0
+    total_output_tokens     = 0
+    total_frames_analizados = 0
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-                tmp.write(video_file.getvalue())
-                tmp_path = tmp.name
+    n_archivos = len(uploaded_files)
+    progress   = st.progress(0, text="Procesando archivos…")
 
-            cap = cv2.VideoCapture(tmp_path)
-            fps_vid    = cap.get(cv2.CAP_PROP_FPS) or 25
-            n_frames   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duracion_s = n_frames / fps_vid
-            cap.release()
+    for i_archivo, archivo in enumerate(uploaded_files):
 
-            n_analizar = max(1, int(duracion_s / intervalo))
-            st.info(f"⏱ Duración: **{duracion_s:.0f}s** · Se analizarán **{n_analizar} frames** · Tiempo estimado: ~{n_analizar * 8}s")
-            analizar_video = st.button("🎬 Analizar vídeo", type="primary", use_container_width=True)
+        if not es_video(archivo):
+            # ── FOTO ──────────────────────────────────────────────
+            progress.progress(
+                i_archivo / n_archivos,
+                text=f"Analizando foto {i_archivo + 1}/{n_archivos}: {archivo.name}…"
+            )
+            try:
+                data = analizar_imagen(archivo.getvalue(), archivo.type)
+                todos_productos.extend(data["productos"])
+                if data.get("notas"):
+                    notas_todas.append(data["notas"])
+                u = data.get("_usage", {})
+                total_input_tokens      += u.get("input_tokens",  0)
+                total_output_tokens     += u.get("output_tokens", 0)
+                total_frames_analizados += 1
+            except Exception as e:
+                st.warning(f"⚠️ Error en {archivo.name}: {e}")
+
         else:
-            st.info("👆 Sube un vídeo para comenzar")
-            analizar_video = False
-            tmp_path = None
-
-    with col_results:
-        st.subheader("📊 Resultados")
-
-        if video_file and analizar_video and tmp_path:
+            # ── VÍDEO ─────────────────────────────────────────────
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                tmp.write(archivo.getvalue())
+                tmp_path = tmp.name
             try:
                 frames = extraer_frames(tmp_path, intervalo)
-                todos_productos = []
-                notas_todas     = []
-
-                progress = st.progress(0, text="Analizando frames…")
-                total_input_tokens  = 0
-                total_output_tokens = 0
-
-                for i, frame_bytes in enumerate(frames):
-                    progress.progress((i + 1) / len(frames), text=f"Frame {i+1} de {len(frames)}…")
+                for i_frame, frame_bytes in enumerate(frames):
+                    progress.progress(
+                        (i_archivo + (i_frame + 1) / max(len(frames), 1)) / n_archivos,
+                        text=f"Vídeo {i_archivo + 1}/{n_archivos} — frame {i_frame + 1}/{len(frames)}: {archivo.name}…"
+                    )
                     try:
                         data = analizar_imagen(frame_bytes, "image/jpeg")
                         todos_productos.extend(data["productos"])
                         if data.get("notas"):
                             notas_todas.append(data["notas"])
                         u = data.get("_usage", {})
-                        total_input_tokens  += u.get("input_tokens",  0)
-                        total_output_tokens += u.get("output_tokens", 0)
+                        total_input_tokens      += u.get("input_tokens",  0)
+                        total_output_tokens     += u.get("output_tokens", 0)
+                        total_frames_analizados += 1
                     except Exception:
                         pass
-
-                progress.empty()
+            finally:
                 os.unlink(tmp_path)
 
-                if not todos_productos:
-                    st.error("No se pudieron analizar los frames.")
-                else:
-                    df_total = pd.DataFrame(todos_productos)
-                    for col in ["formato","precio","promocion","ancho_relativo"]:
-                        if col not in df_total.columns:
-                            df_total[col] = None
-                    df_total["ancho_relativo"] = pd.to_numeric(df_total["ancho_relativo"], errors="coerce").fillna(1)
-                    df_total["precio"]         = pd.to_numeric(df_total["precio"],         errors="coerce")
+    progress.empty()
 
-                    df_agg = df_total.groupby(["marca","pet","tecnologia","segmento","formato"], as_index=False, dropna=False).agg(
-                        facings=("facings","sum"),
-                        ancho_relativo=("ancho_relativo","sum"),
-                        precio=("precio","mean"),
-                        promocion=("promocion","first"),
-                    )
-                    notas = " · ".join(set(notas_todas)) if notas_todas else ""
-                    st.success(f"✅ {len(frames)} frames analizados")
-                    mostrar_resultados(df_agg, notas,
-                                       origen=f"Resultado acumulado de {len(frames)} frames (intervalo: {intervalo}s)")
-                    mostrar_tokens(total_input_tokens, total_output_tokens, n_frames=len(frames))
+    if not todos_productos:
+        st.error("No se pudieron analizar los archivos.")
+    else:
+        df_total = pd.DataFrame(todos_productos)
+        for col in ["formato", "precio", "promocion", "ancho_relativo"]:
+            if col not in df_total.columns:
+                df_total[col] = None
+        df_total["ancho_relativo"] = pd.to_numeric(df_total["ancho_relativo"], errors="coerce").fillna(1)
+        df_total["precio"]         = pd.to_numeric(df_total["precio"],         errors="coerce")
 
-                    with st.expander("🔍 Ver respuesta bruta del último frame (debug)"):
-                        st.code(st.session_state.get("debug_raw", ""), language="json")
+        # Agregar por combinación única; precio = primer valor visto (no media)
+        df_agg = df_total.groupby(
+            ["marca", "pet", "tecnologia", "segmento", "formato"],
+            as_index=False, dropna=False,
+        ).agg(
+            facings=("facings", "sum"),
+            ancho_relativo=("ancho_relativo", "sum"),
+            precio=("precio", "first"),
+            promocion=("promocion", "first"),
+        )
 
-            except Exception as e:
-                st.error(f"❌ Error inesperado: {e}")
+        notas  = " · ".join(set(notas_todas)) if notas_todas else ""
+        origen = f"{len(uploaded_files)} archivo(s): {', '.join(f.name for f in uploaded_files)}"
 
-        elif not video_file:
-            st.markdown('<div style="text-align:center;padding:60px 20px;color:#adb5bd"><div style="font-size:3rem">🎬</div><div>Los resultados aparecerán aquí</div></div>', unsafe_allow_html=True)
+        st.success(f"✅ {len(uploaded_files)} archivo(s) procesados · {total_frames_analizados} análisis realizados")
+        st.divider()
+
+        mostrar_resultados(df_agg, notas, origen=origen)
+        mostrar_tokens(total_input_tokens, total_output_tokens, n_frames=total_frames_analizados)
+
+        with st.expander("🔍 Ver respuesta bruta del último análisis (debug)"):
+            st.code(st.session_state.get("debug_raw", ""), language="json")
