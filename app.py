@@ -410,12 +410,37 @@ if uploaded_files:
     else:
         intervalo = 3
 
+    # ── Modo solapamiento (solo cuando hay más de 1 archivo) ──────────────────
+    if len(uploaded_files) > 1:
+        st.divider()
+        st.markdown("**¿Cómo cubren el lineal estos archivos?**")
+        modo_solapamiento = st.radio(
+            "solapamiento",
+            [
+                "📐 Zonas distintas del lineal — no se solapan (sumar facings)",
+                "🔄 Misma zona, ángulos distintos — pueden solaparse (usar el máximo por producto)",
+            ],
+            index=0,
+            horizontal=False,
+            label_visibility="collapsed",
+        )
+        hay_solapamiento = "máximo" in modo_solapamiento
+        if hay_solapamiento:
+            st.info(
+                "ℹ️ Modo **sin duplicados**: para cada combinación de producto se tomará "
+                "el mayor número de facings observado en cualquiera de los archivos, "
+                "evitando contar los mismos productos varias veces."
+            )
+    else:
+        hay_solapamiento = False
+
     st.divider()
     analizar = st.button("🔍 Analizar todo", type="primary", use_container_width=True)
 else:
     st.info("👆 Sube una o más fotos y/o vídeos para comenzar")
-    analizar  = False
-    intervalo = 3
+    analizar          = False
+    intervalo         = 3
+    hay_solapamiento  = False
 
 # ── Análisis ───────────────────────────────────────────────────────────────────
 if uploaded_files and analizar:
@@ -486,19 +511,25 @@ if uploaded_files and analizar:
         df_total["ancho_relativo"] = pd.to_numeric(df_total["ancho_relativo"], errors="coerce").fillna(1)
         df_total["precio"]         = pd.to_numeric(df_total["precio"],         errors="coerce")
 
-        # Agregar por combinación única; precio = primer valor visto (no media)
+        # Agregar por combinación única
+        # · Sin solapamiento → sumar facings/ancho de todas las fotos (zonas distintas)
+        # · Con solapamiento → tomar el máximo observado para evitar doble conteo
+        agg_fn = "max" if hay_solapamiento else "sum"
+
         df_agg = df_total.groupby(
             ["marca", "pet", "tecnologia", "segmento", "formato"],
             as_index=False, dropna=False,
         ).agg(
-            facings=("facings", "sum"),
-            ancho_relativo=("ancho_relativo", "sum"),
+            facings=("facings", agg_fn),
+            ancho_relativo=("ancho_relativo", agg_fn),
             precio=("precio", "first"),
             promocion=("promocion", "first"),
         )
 
         notas  = " · ".join(set(notas_todas)) if notas_todas else ""
         origen = f"{len(uploaded_files)} archivo(s): {', '.join(f.name for f in uploaded_files)}"
+        if hay_solapamiento:
+            origen += " · ⚠️ Modo sin duplicados (facings = máximo por producto)"
 
         st.success(f"✅ {len(uploaded_files)} archivo(s) procesados · {total_frames_analizados} análisis realizados")
         st.divider()
