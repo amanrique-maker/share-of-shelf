@@ -475,12 +475,23 @@ if uploaded_files and analizar:
     if not todos_productos:
         st.error("No se detectaron productos.")
     else:
-        df_agg = pd.DataFrame(todos_productos)
+        df_raw = pd.DataFrame(todos_productos)
         for col in ["formato", "precio", "promocion", "ancho_relativo"]:
-            if col not in df_agg.columns:
-                df_agg[col] = None
-        df_agg["ancho_relativo"] = pd.to_numeric(df_agg["ancho_relativo"], errors="coerce").fillna(1)
-        df_agg["precio"]         = pd.to_numeric(df_agg["precio"],         errors="coerce")
+            if col not in df_raw.columns:
+                df_raw[col] = None
+        df_raw["ancho_relativo"] = pd.to_numeric(df_raw["ancho_relativo"], errors="coerce").fillna(1)
+        df_raw["precio"]         = pd.to_numeric(df_raw["precio"],         errors="coerce")
+
+        # Deduplicar por solape: misma combinación → quedarse con el MAX de facings/ancho
+        df_agg = df_raw.groupby(
+            ["marca", "pet", "tecnologia", "segmento", "formato"],
+            as_index=False, dropna=False,
+        ).agg(
+            facings=("facings", "max"),
+            ancho_relativo=("ancho_relativo", "max"),
+            precio=("precio", "first"),
+            promocion=("promocion", "first"),
+        )
 
         origen = f"{len(uploaded_files)} archivo(s): {', '.join(f.name for f in uploaded_files)}"
         n_imgs = len(imagenes)
