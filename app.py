@@ -43,7 +43,9 @@ def es_video(f) -> bool:
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
 PROMPT = """Analiza estas imágenes de baldas de una tienda de alimentación para mascotas.
-Son fotos consecutivas del MISMO lineal. Analízalas como un conjunto único y devuelve UN SOLO JSON con todos los productos.
+Son fotos consecutivas del MISMO lineal tomadas de izquierda a derecha. Analízalas como un conjunto único y devuelve UN SOLO JSON con todos los productos.
+
+MUY IMPORTANTE SOBRE SOLAPAMIENTO: Las fotos consecutivas comparten productos en sus bordes. Si el mismo producto aparece en varias fotos, cuéntalo UNA SOLA VEZ con el total de facings real. No dupliques filas por solapamiento entre fotos.
 
 IMPORTANTE: Sé lo más granular posible. Cada fila representa una combinación única de Marca + Pet + Tecnología + Segmento + Formato. No agrupes productos distintos en una sola fila.
 
