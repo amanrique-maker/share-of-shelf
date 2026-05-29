@@ -42,7 +42,8 @@ def es_video(f) -> bool:
     return f.type.startswith("video/") or f.name.lower().endswith((".mp4", ".mov", ".avi", ".mkv"))
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
-PROMPT = """Analiza esta imagen de baldas de una tienda de alimentación para mascotas.
+PROMPT = """Analiza estas imágenes de baldas de una tienda de alimentación para mascotas.
+Son fotos consecutivas del MISMO lineal. Analízalas como un conjunto único y devuelve UN SOLO JSON con todos los productos.
 
 IMPORTANTE: Sé lo más granular posible. Cada fila representa una combinación única de Marca + Pet + Tecnología + Segmento + Formato. No agrupes productos distintos en una sola fila.
 
@@ -74,22 +75,30 @@ Devuelve ÚNICAMENTE un JSON válido, sin texto adicional:
   "notas": ""
 }"""
 
-# ── Función análisis imagen ────────────────────────────────────────────────────
-def analizar_imagen(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
+# ── Función análisis (múltiples imágenes en una sola llamada) ──────────────────
+def analizar_imagenes(imagenes: list[dict]) -> dict:
+    """
+    imagenes: lista de {"bytes": bytes, "media_type": str}
+    Envía todas las imágenes en una sola llamada a Claude.
+    """
     api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or st.session_state.get("_api_key", "")
     if not api_key:
         st.error("❌ Introduce tu API Key de Anthropic en la barra lateral izquierda.")
         st.stop()
-    client  = anthropic.Anthropic(api_key=api_key)
-    img_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    client = anthropic.Anthropic(api_key=api_key)
+
+    content = []
+    for img in imagenes:
+        img_b64 = base64.standard_b64encode(img["bytes"]).decode("utf-8")
+        content.append({"type": "image", "source": {
+            "type": "base64", "media_type": img["media_type"], "data": img_b64
+        }})
+    content.append({"type": "text", "text": PROMPT})
 
     msg = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=4000,
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
-            {"type": "text",  "text": PROMPT},
-        ]}],
+        max_tokens=8000,
+        messages=[{"role": "user", "content": content}],
     )
 
     raw = msg.content[0].text.strip()
@@ -410,132 +419,75 @@ if uploaded_files:
     else:
         intervalo = 3
 
-    # ── Modo solapamiento (solo cuando hay más de 1 archivo) ──────────────────
-    if len(uploaded_files) > 1:
-        st.divider()
-        st.markdown("**¿Cómo cubren el lineal estos archivos?**")
-        modo_solapamiento = st.radio(
-            "solapamiento",
-            [
-                "📐 Zonas distintas del lineal — no se solapan (sumar facings)",
-                "🔄 Misma zona, ángulos distintos — pueden solaparse (usar el máximo por producto)",
-            ],
-            index=0,
-            horizontal=False,
-            label_visibility="collapsed",
-        )
-        hay_solapamiento = "máximo" in modo_solapamiento
-        if hay_solapamiento:
-            st.info(
-                "ℹ️ Modo **sin duplicados**: para cada combinación de producto se tomará "
-                "el mayor número de facings observado en cualquiera de los archivos, "
-                "evitando contar los mismos productos varias veces."
-            )
-    else:
-        hay_solapamiento = False
 
     st.divider()
     analizar = st.button("🔍 Analizar todo", type="primary", use_container_width=True)
 else:
     st.info("👆 Sube una o más fotos y/o vídeos para comenzar")
-    analizar          = False
-    intervalo         = 3
-    hay_solapamiento  = False
+    analizar  = False
+    intervalo = 3
 
 # ── Análisis ───────────────────────────────────────────────────────────────────
 if uploaded_files and analizar:
-    todos_productos         = []
-    notas_todas             = []
-    total_input_tokens      = 0
-    total_output_tokens     = 0
-    total_frames_analizados = 0
 
+    # 1. Recopilar todas las imágenes (fotos + frames de vídeo)
+    imagenes = []   # lista de {"bytes": ..., "media_type": ...}
+    tmp_paths = []
+
+    progress = st.progress(0, text="Preparando imágenes…")
     n_archivos = len(uploaded_files)
-    progress   = st.progress(0, text="Procesando archivos…")
 
     for i_archivo, archivo in enumerate(uploaded_files):
+        progress.progress(i_archivo / n_archivos, text=f"Cargando {archivo.name}…")
 
         if not es_video(archivo):
-            # ── FOTO ──────────────────────────────────────────────
-            progress.progress(
-                i_archivo / n_archivos,
-                text=f"Analizando foto {i_archivo + 1}/{n_archivos}: {archivo.name}…"
-            )
-            try:
-                data = analizar_imagen(archivo.getvalue(), archivo.type)
-                todos_productos.extend(data["productos"])
-                if data.get("notas"):
-                    notas_todas.append(data["notas"])
-                u = data.get("_usage", {})
-                total_input_tokens      += u.get("input_tokens",  0)
-                total_output_tokens     += u.get("output_tokens", 0)
-                total_frames_analizados += 1
-            except Exception as e:
-                st.warning(f"⚠️ Error en {archivo.name}: {e}")
-
+            imagenes.append({"bytes": archivo.getvalue(), "media_type": archivo.type or "image/jpeg"})
         else:
-            # ── VÍDEO ─────────────────────────────────────────────
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
                 tmp.write(archivo.getvalue())
-                tmp_path = tmp.name
-            try:
-                frames = extraer_frames(tmp_path, intervalo)
-                for i_frame, frame_bytes in enumerate(frames):
-                    progress.progress(
-                        (i_archivo + (i_frame + 1) / max(len(frames), 1)) / n_archivos,
-                        text=f"Vídeo {i_archivo + 1}/{n_archivos} — frame {i_frame + 1}/{len(frames)}: {archivo.name}…"
-                    )
-                    try:
-                        data = analizar_imagen(frame_bytes, "image/jpeg")
-                        todos_productos.extend(data["productos"])
-                        if data.get("notas"):
-                            notas_todas.append(data["notas"])
-                        u = data.get("_usage", {})
-                        total_input_tokens      += u.get("input_tokens",  0)
-                        total_output_tokens     += u.get("output_tokens", 0)
-                        total_frames_analizados += 1
-                    except Exception:
-                        pass
-            finally:
-                os.unlink(tmp_path)
+                tmp_paths.append(tmp.name)
+            frames = extraer_frames(tmp_paths[-1], intervalo)
+            for fb in frames:
+                imagenes.append({"bytes": fb, "media_type": "image/jpeg"})
+
+    progress.progress(1.0, text=f"Enviando {len(imagenes)} imagen(es) a Claude…")
+
+    # 2. Una sola llamada con todas las imágenes
+    try:
+        data = analizar_imagenes(imagenes)
+        todos_productos = data.get("productos", [])
+        notas = data.get("notas", "")
+        u = data.get("_usage", {})
+    except Exception as e:
+        st.error(f"❌ Error en el análisis: {e}")
+        todos_productos = []
+        notas = ""
+        u = {}
+    finally:
+        for p in tmp_paths:
+            try: os.unlink(p)
+            except: pass
 
     progress.empty()
 
     if not todos_productos:
-        st.error("No se pudieron analizar los archivos.")
+        st.error("No se detectaron productos.")
     else:
-        df_total = pd.DataFrame(todos_productos)
+        df_agg = pd.DataFrame(todos_productos)
         for col in ["formato", "precio", "promocion", "ancho_relativo"]:
-            if col not in df_total.columns:
-                df_total[col] = None
-        df_total["ancho_relativo"] = pd.to_numeric(df_total["ancho_relativo"], errors="coerce").fillna(1)
-        df_total["precio"]         = pd.to_numeric(df_total["precio"],         errors="coerce")
+            if col not in df_agg.columns:
+                df_agg[col] = None
+        df_agg["ancho_relativo"] = pd.to_numeric(df_agg["ancho_relativo"], errors="coerce").fillna(1)
+        df_agg["precio"]         = pd.to_numeric(df_agg["precio"],         errors="coerce")
 
-        # Agregar por combinación única
-        # · Sin solapamiento → sumar facings/ancho de todas las fotos (zonas distintas)
-        # · Con solapamiento → tomar el máximo observado para evitar doble conteo
-        agg_fn = "max" if hay_solapamiento else "sum"
-
-        df_agg = df_total.groupby(
-            ["marca", "pet", "tecnologia", "segmento", "formato"],
-            as_index=False, dropna=False,
-        ).agg(
-            facings=("facings", agg_fn),
-            ancho_relativo=("ancho_relativo", agg_fn),
-            precio=("precio", "first"),
-            promocion=("promocion", "first"),
-        )
-
-        notas  = " · ".join(set(notas_todas)) if notas_todas else ""
         origen = f"{len(uploaded_files)} archivo(s): {', '.join(f.name for f in uploaded_files)}"
-        if hay_solapamiento:
-            origen += " · ⚠️ Modo sin duplicados (facings = máximo por producto)"
+        n_imgs = len(imagenes)
 
-        st.success(f"✅ {len(uploaded_files)} archivo(s) procesados · {total_frames_analizados} análisis realizados")
+        st.success(f"✅ {n_imgs} imagen(es) analizadas en una sola llamada · {len(todos_productos)} productos detectados")
         st.divider()
 
         mostrar_resultados(df_agg, notas, origen=origen)
-        mostrar_tokens(total_input_tokens, total_output_tokens, n_frames=total_frames_analizados)
+        mostrar_tokens(u.get("input_tokens", 0), u.get("output_tokens", 0), n_frames=n_imgs)
 
-        with st.expander("🔍 Ver respuesta bruta del último análisis (debug)"):
+        with st.expander("🔍 Ver respuesta bruta del análisis (debug)"):
             st.code(st.session_state.get("debug_raw", ""), language="json")
