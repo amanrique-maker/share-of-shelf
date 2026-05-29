@@ -45,34 +45,34 @@ def es_video(f) -> bool:
 PROMPT = """Analiza estas imágenes de baldas de una tienda de alimentación para mascotas.
 Son fotos consecutivas del MISMO lineal tomadas de izquierda a derecha. Analízalas como un conjunto único y devuelve UN SOLO JSON con todos los productos.
 
-REGLA CRÍTICA — DEDUPLICACIÓN: Las fotos consecutivas se solapan en los bordes, por lo que el mismo producto puede aparecer en 2 fotos a la vez. Cada combinación única de Marca+Pet+Tecnología+Segmento+Formato debe aparecer EXACTAMENTE UNA VEZ en el JSON. Si ves el mismo producto en varias fotos, decide en cuál está más centrado/visible y úsalo solo en esa, ignorándolo en las demás. NUNCA repitas la misma fila.
+REGLA CRÍTICA — DEDUPLICACIÓN: Las fotos consecutivas se solapan en los bordes. Cada combinación única de Marca+Pet+Tecnología+Segmento+Sub-línea+Formato debe aparecer EXACTAMENTE UNA VEZ en el JSON. Si el mismo producto aparece en varias fotos, cuéntalo solo en la que esté más centrado. NUNCA repitas la misma fila.
 
-IMPORTANTE: Sé lo más granular posible. Cada fila representa una combinación única de Marca + Pet + Tecnología + Segmento + Formato. No agrupes productos distintos en una sola fila.
+IMPORTANTE: Sé lo más granular posible. Cada fila es una SKU distinta. No agrupes variantes distintas en una sola fila.
 
 Para cada grupo de productos visibles identifica:
 
-1. MARCA (ej: Advance, Purina, Royal Canin…). Si no se distingue → "Otros".
+1. MARCA (ej: Advance, Ultima, Brekkies, Royal Canin…). Si no se distingue → "Otros".
 2. PET: "Perro", "Gato" o "Otros".
 3. TECNOLOGÍA — clasifica por el CONTENIDO, no por la forma del envase:
-   - "Dry"    → SOLO bolsas o sacos que contengan pienso seco / croquetas
-   - "Wet"    → cualquier envase con comida húmeda: latas metálicas, tarrinas, sobres/pouches, brick, tetra pak, cajas de cartón con comida húmeda, tarros de cristal
-   - "Snacks" → premios, sticks, palitos, huesos masticables, golosinas, helados para mascotas
-   ATENCIÓN: una caja de cartón NO es automáticamente Dry. Fíjate en las imágenes y texto del envase para determinar si es húmedo o snack.
+   - "Dry"    → bolsas o sacos con pienso seco / croquetas
+   - "Wet"    → latas, tarrinas, sobres/pouches, brick, tetra pak, tarros con comida húmeda
+   - "Snacks" → premios, sticks, palitos, huesos masticables, golosinas
 4. SEGMENTO:
    - Perro → "Maxi-Medium" o "Mini"
    - Gato  → "Esterilizado" o "No Esterilizado"
    - Snacks / Otros → "N/A"
-5. FORMATO: peso o tamaño (ej: "3 kg", "1.5 kg", "400 g"). Si no se ve → null.
-6. FACINGS: unidades visibles de frente (incluye parcialmente tapadas).
-7. ANCHO_RELATIVO: anchura proporcional que ocupa este grupo respecto al total de la balda (número entre 0 y 100). Estima visualmente. El conjunto de todos los valores debe sumar aproximadamente 100.
-8. PRECIO: precio en la etiqueta de balda (decimal, ej: 24.99). Si no se ve → null.
-9. PROMOCION: texto promocional visible (ej: "2x1", "2ª unidad 50%", "-20%"). Si no hay → null.
+5. SUB_LINEA: variante o línea específica del producto visible en el envase. Ejemplos: "Adulto", "Junior", "Senior", "Light", "Digestivo", "Bolas de pelo", "Tracto Urinario", "Yorkshire Terrier", "Nature", "PRO+", "Delicious", "NutriExcel", "Bifensis", "No Grain", "x4 sobres"… Si no se distingue → null.
+6. FORMATO: peso o tamaño (ej: "3 kg", "1.5 kg", "400 g"). Si no se ve → null.
+7. FACINGS: unidades visibles de frente (incluye parcialmente tapadas).
+8. ANCHO_RELATIVO: anchura proporcional respecto al total del lineal (0-100). Debe sumar ~100 entre todos.
+9. PRECIO: precio en etiqueta (decimal). Si no se ve → null.
+10. PROMOCION: texto promocional visible. Si no hay → null.
 
 Devuelve ÚNICAMENTE un JSON válido, sin texto adicional:
 {
   "productos": [
-    {"marca": "Advance", "pet": "Perro", "tecnologia": "Dry", "segmento": "Maxi-Medium", "formato": "3 kg", "facings": 8, "ancho_relativo": 35.0, "precio": 24.99, "promocion": null},
-    {"marca": "Ultima",  "pet": "Gato",  "tecnologia": "Dry", "segmento": "Esterilizado", "formato": "1.5 kg", "facings": 4, "ancho_relativo": 20.0, "precio": 12.50, "promocion": "2x1"}
+    {"marca": "Ultima", "pet": "Gato", "tecnologia": "Dry", "segmento": "Esterilizado", "sub_linea": "Bolas de pelo", "formato": "1.5 kg", "facings": 4, "ancho_relativo": 3.5, "precio": 8.95, "promocion": "SUPEROFERTA"},
+    {"marca": "Ultima", "pet": "Gato", "tecnologia": "Dry", "segmento": "Esterilizado", "sub_linea": "Adulto", "formato": "1.5 kg", "facings": 4, "ancho_relativo": 3.5, "precio": 10.95, "promocion": null}
   ],
   "notas": ""
 }"""
@@ -344,8 +344,8 @@ def mostrar_resultados(df: pd.DataFrame, notas: str, origen: str = ""):
             st.plotly_chart(fig_pie, use_container_width=True)
 
     with tab7:
-        df_show = df[["marca","pet","tecnologia","segmento","formato","facings","sos_ancho","sos_facings","precio","promocion"]].copy()
-        df_show.columns = ["Marca","Pet","Tecnología","Segmento","Formato","Facings","SoS Ancho (%)","SoS Facings (%)","Precio (€)","Promoción"]
+        df_show = df[["marca","pet","tecnologia","segmento","sub_linea","formato","facings","sos_ancho","sos_facings","precio","promocion"]].copy()
+        df_show.columns = ["Marca","Pet","Tecnología","Segmento","Sub-línea","Formato","Facings","SoS Ancho (%)","SoS Facings (%)","Precio (€)","Promoción"]
         st.dataframe(df_show.sort_values("SoS Ancho (%)", ascending=False), hide_index=True, use_container_width=True)
         csv = df_show.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Descargar CSV", data=csv, file_name="share_of_shelf.csv",
@@ -476,7 +476,7 @@ if uploaded_files and analizar:
         st.error("No se detectaron productos.")
     else:
         df_raw = pd.DataFrame(todos_productos)
-        for col in ["formato", "precio", "promocion", "ancho_relativo"]:
+        for col in ["sub_linea", "formato", "precio", "promocion", "ancho_relativo"]:
             if col not in df_raw.columns:
                 df_raw[col] = None
         df_raw["ancho_relativo"] = pd.to_numeric(df_raw["ancho_relativo"], errors="coerce").fillna(1)
@@ -484,7 +484,7 @@ if uploaded_files and analizar:
 
         # Deduplicar por solape: misma combinación → quedarse con el MAX de facings/ancho
         df_agg = df_raw.groupby(
-            ["marca", "pet", "tecnologia", "segmento", "formato"],
+            ["marca", "pet", "tecnologia", "segmento", "sub_linea", "formato"],
             as_index=False, dropna=False,
         ).agg(
             facings=("facings", "max"),
