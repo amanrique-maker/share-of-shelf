@@ -45,7 +45,11 @@ def es_video(f) -> bool:
 PROMPT = """Analiza estas imágenes de baldas de una tienda de alimentación para mascotas.
 Son fotos consecutivas del MISMO lineal tomadas de izquierda a derecha. Analízalas como un conjunto único y devuelve UN SOLO JSON con todos los productos.
 
-REGLA CRÍTICA — DEDUPLICACIÓN: Las fotos consecutivas se solapan en los bordes. Cada combinación única de Marca+Pet+Tecnología+Segmento+Sub-línea+Formato debe aparecer EXACTAMENTE UNA VEZ en el JSON. Si el mismo producto aparece en varias fotos, cuéntalo solo en la que esté más centrado. NUNCA repitas la misma fila.
+REGLA CRÍTICA — EVITAR DUPLICADOS POR SOLAPE: Las fotos consecutivas se solapan ~20-30% en los bordes. Para evitar contar el mismo producto dos veces sigue esta regla estricta:
+- En cada foto, cuenta SOLO los productos que aparecen COMPLETOS o con su mayor parte visible.
+- Si un producto aparece CORTADO por el borde DERECHO de una foto (solo se ve parcialmente), NO lo cuentes en esa foto — ya aparecerá completo en la siguiente.
+- Si un producto aparece cortado por el borde izquierdo, sí cuéntalo (viene de la foto anterior y esta es su foto "principal").
+- Resultado: cada producto aparece exactamente UNA VEZ en todo el JSON.
 
 IMPORTANTE: Sé lo más granular posible. Cada fila es una SKU distinta. No agrupes variantes distintas en una sola fila.
 
